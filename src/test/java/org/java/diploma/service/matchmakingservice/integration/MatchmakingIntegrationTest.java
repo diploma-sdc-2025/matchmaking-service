@@ -3,64 +3,75 @@ package org.java.diploma.service.matchmakingservice.integration;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.crypto.SecretKey;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
 
-@SpringBootTest
+@SpringBootTest(
+        properties = {
+                "spring.data.redis.repositories.enabled=false"
+        }
+)
 @AutoConfigureMockMvc
-@Testcontainers
-@EnabledIfDockerAvailable
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @ActiveProfiles("test")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class MatchmakingIntegrationTest {
-
-    @Container
-    static GenericContainer<?> redis =
-            new GenericContainer<>("redis:7-alpine")
-                    .withExposedPorts(6379);
 
     @Autowired
     MockMvc mockMvc;
 
+    @MockitoBean
+    private RedisTemplate<String, Object> redisTemplate;
+
+    @MockitoBean
+    private StringRedisTemplate stringRedisTemplate;
+
     private String jwtToken;
 
-    @DynamicPropertySource
-    static void properties(DynamicPropertyRegistry registry) {
-        registry.add("spring.redis.host", redis::getHost);
-        registry.add("spring.redis.port", () -> redis.getMappedPort(6379));
-        registry.add(
-                "auth.jwt.secret",
-                () -> "test-secret-test-secret-test-secret-test-secret"
-        );
+    @BeforeEach
+    void setupRedisMocks() {
+        ValueOperations<String, Object> valueOps = mock(ValueOperations.class);
+        ZSetOperations<String, Object> zSetOps = mock(ZSetOperations.class);
+
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+
+        when(zSetOps.score(any(), any())).thenReturn(null);
+        when(zSetOps.zCard(any())).thenReturn(0L);
+
+        when(stringRedisTemplate.opsForValue()).thenReturn(mock(ValueOperations.class));
     }
 
     @BeforeAll
     void setupJwt() {
-        SecretKey key = Keys.hmacShaKeyFor(
-                "test-secret-test-secret-test-secret-test-secret".getBytes()
-        );
+        String secret = "test-secret-test-secret-test-secret-test-secret";
+        SecretKey key = Keys.hmacShaKeyFor(secret.getBytes());
 
         jwtToken = Jwts.builder()
                 .setSubject("42")
                 .signWith(key)
                 .compact();
+
+        System.setProperty("auth.jwt.secret", secret);
     }
 
     @Test
