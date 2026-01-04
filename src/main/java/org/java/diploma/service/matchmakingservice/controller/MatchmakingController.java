@@ -1,7 +1,10 @@
 package org.java.diploma.service.matchmakingservice.controller;
 
+import org.java.diploma.service.matchmakingservice.dto.QueueJoinResponse;
 import org.java.diploma.service.matchmakingservice.dto.QueueStatusResponse;
 import org.java.diploma.service.matchmakingservice.service.MatchmakingService;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -15,9 +18,14 @@ public class MatchmakingController {
     }
 
     @PostMapping("/join")
-    public void join() {
-        service.joinQueue();
+    public ResponseEntity<QueueJoinResponse> joinQueue(
+            Authentication authentication) {
+
+        return ResponseEntity.ok(
+                service.joinQueue(authentication)
+        );
     }
+
 
     @PostMapping("/leave")
     public void leave() {

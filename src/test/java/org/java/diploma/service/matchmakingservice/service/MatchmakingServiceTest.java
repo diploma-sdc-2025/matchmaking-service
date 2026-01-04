@@ -1,5 +1,6 @@
 package org.java.diploma.service.matchmakingservice.service;
 
+import org.java.diploma.service.matchmakingservice.dto.QueueJoinResponse;
 import org.java.diploma.service.matchmakingservice.dto.QueueStatusResponse;
 import org.java.diploma.service.matchmakingservice.entity.MatchmakingHistory;
 import org.java.diploma.service.matchmakingservice.repository.MatchmakingHistoryRepository;
@@ -10,6 +11,7 @@ import org.mockito.*;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -51,25 +53,43 @@ class MatchmakingServiceTest {
     void joinQueue_shouldAddUserAndPersistHistory() {
         when(zSetOperations.score(anyString(), anyString()))
                 .thenReturn(null);
+        when(zSetOperations.zCard("queue:active"))
+                .thenReturn(1L);
 
-        matchmakingService.joinQueue();
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        QueueJoinResponse response = matchmakingService.joinQueue(auth);
+
+        assertNotNull(response);
+        assertEquals("JOINED", response.status());
+        assertEquals(42L, response.userId());
 
         verify(zSetOperations).add(eq("queue:active"), eq("42"), anyDouble());
         verify(historyRepository).save(any(MatchmakingHistory.class));
         verify(redisPublisher).publish(any());
     }
 
+
     @Test
     void joinQueue_shouldDoNothing_ifUserAlreadyInQueue() {
         when(zSetOperations.score("queue:active", "42"))
                 .thenReturn(1.0);
+        when(zSetOperations.zCard("queue:active"))
+                .thenReturn(5L);
 
-        matchmakingService.joinQueue();
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        QueueJoinResponse response = matchmakingService.joinQueue(auth);
+
+        assertNotNull(response);
+        assertEquals("ALREADY_IN_QUEUE", response.status());
+        assertEquals(42L, response.userId());
 
         verify(zSetOperations, never()).add(any(), any(), anyDouble());
         verify(historyRepository, never()).save(any());
         verify(redisPublisher, never()).publish(any());
     }
+
 
     @Test
     void leaveQueue_shouldCancelWaitingHistory() {

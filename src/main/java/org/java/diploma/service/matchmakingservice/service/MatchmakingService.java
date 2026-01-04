@@ -1,10 +1,12 @@
 package org.java.diploma.service.matchmakingservice.service;
 
+import org.java.diploma.service.matchmakingservice.dto.QueueJoinResponse;
 import org.java.diploma.service.matchmakingservice.dto.QueueStatusResponse;
 import org.java.diploma.service.matchmakingservice.entity.MatchmakingHistory;
 import org.java.diploma.service.matchmakingservice.event.MatchmakingEvent;
 import org.java.diploma.service.matchmakingservice.repository.MatchmakingHistoryRepository;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,14 +33,24 @@ public class MatchmakingService {
     }
 
     @Transactional
-    public void joinQueue() {
-        Long userId = currentUserId();
+    public QueueJoinResponse joinQueue(Authentication authentication) {
 
-        if (redis.opsForZSet().score(QUEUE_KEY, userId.toString()) != null) {
-            return;
-        }
-
+        Long userId = Long.parseLong(authentication.getName());
         Instant now = Instant.now();
+
+        Double existingScore = redis.opsForZSet()
+                .score(QUEUE_KEY, userId.toString());
+
+        if (existingScore != null) {
+            Long queueSize = redis.opsForZSet().zCard(QUEUE_KEY);
+
+            return new QueueJoinResponse(
+                    "ALREADY_IN_QUEUE",
+                    userId,
+                    queueSize != null ? queueSize : 0L,
+                    Instant.ofEpochMilli(existingScore.longValue())
+            );
+        }
 
         redis.opsForZSet()
                 .add(QUEUE_KEY, userId.toString(), System.currentTimeMillis());
@@ -50,6 +62,15 @@ public class MatchmakingService {
         historyRepo.save(history);
 
         publishEvent("player_join", userId);
+
+        Long queueSize = redis.opsForZSet().zCard(QUEUE_KEY);
+
+        return new QueueJoinResponse(
+                "JOINED",
+                userId,
+                queueSize != null ? queueSize : 0L,
+                now
+        );
     }
 
     @Transactional
