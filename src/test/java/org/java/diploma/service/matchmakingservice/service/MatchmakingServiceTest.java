@@ -12,7 +12,6 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Instant;
@@ -40,13 +39,12 @@ class MatchmakingServiceTest {
     @InjectMocks
     MatchmakingService matchmakingService;
 
+    private Authentication auth;
+
     @BeforeEach
     void setup() {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-
-        var auth =
-                new UsernamePasswordAuthenticationToken("42", null);
-        SecurityContextHolder.getContext().setAuthentication(auth);
+        auth = new UsernamePasswordAuthenticationToken("42", null);
     }
 
     @Test
@@ -55,41 +53,42 @@ class MatchmakingServiceTest {
                 .thenReturn(null);
         when(zSetOperations.zCard("queue:active"))
                 .thenReturn(1L);
-
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        when(zSetOperations.rank("queue:active", "42"))
+                .thenReturn(0L);
 
         QueueJoinResponse response = matchmakingService.joinQueue(auth);
 
         assertNotNull(response);
         assertEquals("JOINED", response.status());
         assertEquals(42L, response.userId());
+        assertEquals(1L, response.queueSize());
+        assertNotNull(response.joinedAt());
 
         verify(zSetOperations).add(eq("queue:active"), eq("42"), anyDouble());
         verify(historyRepository).save(any(MatchmakingHistory.class));
         verify(redisPublisher).publish(any());
     }
 
-
     @Test
     void joinQueue_shouldDoNothing_ifUserAlreadyInQueue() {
+        double existingTimestamp = System.currentTimeMillis();
         when(zSetOperations.score("queue:active", "42"))
-                .thenReturn(1.0);
+                .thenReturn(existingTimestamp);
         when(zSetOperations.zCard("queue:active"))
                 .thenReturn(5L);
-
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 
         QueueJoinResponse response = matchmakingService.joinQueue(auth);
 
         assertNotNull(response);
         assertEquals("ALREADY_IN_QUEUE", response.status());
         assertEquals(42L, response.userId());
+        assertEquals(5L, response.queueSize());
+        assertEquals(Instant.ofEpochMilli((long) existingTimestamp), response.joinedAt());
 
         verify(zSetOperations, never()).add(any(), any(), anyDouble());
         verify(historyRepository, never()).save(any());
         verify(redisPublisher, never()).publish(any());
     }
-
 
     @Test
     void leaveQueue_shouldCancelWaitingHistory() {
@@ -98,10 +97,12 @@ class MatchmakingServiceTest {
         history.setJoinedAt(Instant.now().minusSeconds(10));
         history.setStatus("WAITING");
 
+        when(zSetOperations.remove("queue:active", "42"))
+                .thenReturn(1L);
         when(historyRepository.findFirstByUserIdAndStatus(42L, "WAITING"))
                 .thenReturn(Optional.of(history));
 
-        matchmakingService.leaveQueue();
+        matchmakingService.leaveQueue(auth);
 
         assertEquals("CANCELLED", history.getStatus());
         assertNotNull(history.getLeftQueueAt());
@@ -119,8 +120,7 @@ class MatchmakingServiceTest {
         when(zSetOperations.zCard("queue:active"))
                 .thenReturn(5L);
 
-        QueueStatusResponse response =
-                matchmakingService.getQueueStatus();
+        QueueStatusResponse response = matchmakingService.getQueueStatus(auth);
 
         assertTrue(response.isInQueue());
         assertEquals(2, response.getPosition());
@@ -134,8 +134,7 @@ class MatchmakingServiceTest {
         when(zSetOperations.zCard("queue:active"))
                 .thenReturn(3L);
 
-        QueueStatusResponse response =
-                matchmakingService.getQueueStatus();
+        QueueStatusResponse response = matchmakingService.getQueueStatus(auth);
 
         assertFalse(response.isInQueue());
         assertNull(response.getPosition());

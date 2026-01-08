@@ -18,23 +18,17 @@ class JwtAuthenticationFilterTest {
     @Test
     void shouldAuthenticateValidJwt() throws Exception {
         String secret = "test-secret-test-secret-test-secret";
-        SecretKey key =
-                Keys.hmacShaKeyFor(secret.getBytes());
+        SecretKey key = Keys.hmacShaKeyFor(secret.getBytes());
 
         String token = Jwts.builder()
                 .setSubject("42")
                 .signWith(key)
                 .compact();
 
-        JwtAuthenticationFilter filter =
-                new JwtAuthenticationFilter(secret);
+        JwtAuthenticationFilter filter = new JwtAuthenticationFilter(secret);
 
-        MockHttpServletRequest request =
-                new MockHttpServletRequest();
-        request.addHeader(
-                "Authorization",
-                "Bearer " + token
-        );
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer " + token);
 
         filter.doFilter(
                 request,
@@ -42,12 +36,10 @@ class JwtAuthenticationFilterTest {
                 (req, res) -> {}
         );
 
-        assertNotNull(
-                SecurityContextHolder.getContext()
-                        .getAuthentication()
-        );
+        assertNotNull(SecurityContextHolder.getContext().getAuthentication());
+
         assertEquals(
-                "42",
+                42L,
                 SecurityContextHolder.getContext()
                         .getAuthentication()
                         .getPrincipal()
