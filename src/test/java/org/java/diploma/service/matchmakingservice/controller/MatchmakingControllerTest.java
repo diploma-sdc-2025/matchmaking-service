@@ -66,7 +66,7 @@ class MatchmakingControllerTest {
     @WithMockUser(username = "42")
     void statusEndpoint_shouldReturnQueueStatus() throws Exception {
         when(matchmakingService.getQueueStatus(any(Authentication.class)))
-                .thenReturn(new QueueStatusResponse(true, 1, 3));
+                .thenReturn(new QueueStatusResponse(true, 1, 3, null));
 
         mockMvc.perform(get("/api/matchmaking/status"))
                 .andExpect(status().isOk())

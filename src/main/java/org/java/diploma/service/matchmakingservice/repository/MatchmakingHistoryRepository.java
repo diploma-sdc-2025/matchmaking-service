@@ -12,4 +12,10 @@ public interface MatchmakingHistoryRepository
             Long userId,
             String status
     );
+
+    /** Latest row for this user in MATCHED state (for exposing game matchId after pairing). */
+    Optional<MatchmakingHistory> findFirstByUserIdAndStatusOrderByMatchedAtDesc(
+            Long userId,
+            String status
+    );
 }

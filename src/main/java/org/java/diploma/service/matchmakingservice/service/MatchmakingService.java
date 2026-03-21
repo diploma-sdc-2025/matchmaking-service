@@ -12,6 +12,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 
 @Service
@@ -26,6 +27,10 @@ public class MatchmakingService {
 
     private static final String STATUS_WAITING = "WAITING";
     private static final String STATUS_CANCELLED = "CANCELLED";
+    private static final String STATUS_MATCHED = "MATCHED";
+
+    /** Only expose matchId for a short time so old games are not re-triggered on /status. */
+    private static final Duration RECENT_MATCH_WINDOW = Duration.ofMinutes(5);
 
     private static final String EVENT_TYPE_PLAYER_JOIN = "player_join";
     private static final String EVENT_TYPE_PLAYER_LEAVE = "player_leave";
@@ -37,7 +42,8 @@ public class MatchmakingService {
     private static final String USER_ALREADY_IN_QUEUE = "User {} attempted to join queue but is already in queue";
     private static final String USER_LEFT_QUEUE = "User {} left matchmaking queue after {} seconds";
     private static final String USER_NOT_IN_QUEUE = "User {} attempted to leave queue but was not in queue";
-    private static final String QUEUE_STATUS_RETRIEVED = "Queue status retrieved for user {}: inQueue={}, position={}, queueSize={}";
+    private static final String QUEUE_STATUS_RETRIEVED =
+            "Queue status retrieved for user {}: inQueue={}, position={}, queueSize={}, matchId={}";
     private static final String EVENT_PUBLISHED = "Published {} event for user {}, queue size: {}";
     private static final String HISTORY_RECORD_CREATED = "Created matchmaking history record for user {}";
     private static final String HISTORY_RECORD_UPDATED = "Updated matchmaking history record for user {} with status {}";
@@ -141,9 +147,19 @@ public class MatchmakingService {
         Integer position = inQueue ? rank.intValue() + POSITION_OFFSET : null;
         Integer queueSize = size != null ? size.intValue() : DEFAULT_QUEUE_SIZE;
 
-        logger.debug(QUEUE_STATUS_RETRIEVED, userId, inQueue, position, queueSize);
+        Long activeMatchId = null;
+        if (!inQueue) {
+            activeMatchId = historyRepo
+                    .findFirstByUserIdAndStatusOrderByMatchedAtDesc(userId, STATUS_MATCHED)
+                    .filter(h -> h.getMatchId() != null && h.getMatchedAt() != null)
+                    .filter(h -> h.getMatchedAt().isAfter(Instant.now().minus(RECENT_MATCH_WINDOW)))
+                    .map(MatchmakingHistory::getMatchId)
+                    .orElse(null);
+        }
 
-        return new QueueStatusResponse(inQueue, position, queueSize);
+        logger.debug(QUEUE_STATUS_RETRIEVED, userId, inQueue, position, queueSize, activeMatchId);
+
+        return new QueueStatusResponse(inQueue, position, queueSize, activeMatchId);
     }
 
     private void publishEvent(String type, Long userId) {

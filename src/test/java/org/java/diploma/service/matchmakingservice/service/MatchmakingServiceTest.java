@@ -125,6 +125,7 @@ class MatchmakingServiceTest {
         assertTrue(response.isInQueue());
         assertEquals(2, response.getPosition());
         assertEquals(5, response.getQueueSize());
+        assertNull(response.getMatchId());
     }
 
     @Test
@@ -139,5 +140,6 @@ class MatchmakingServiceTest {
         assertFalse(response.isInQueue());
         assertNull(response.getPosition());
         assertEquals(3, response.getQueueSize());
+        assertNull(response.getMatchId());
     }
 }
