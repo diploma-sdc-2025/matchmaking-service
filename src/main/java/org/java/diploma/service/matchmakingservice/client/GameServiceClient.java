@@ -1,83 +1,76 @@
 package org.java.diploma.service.matchmakingservice.client;
 
-import org.java.diploma.service.matchmakingservice.dto.CreateMatchRequest;
-import org.java.diploma.service.matchmakingservice.dto.GameServiceCreateMatchRequest;
-import org.java.diploma.service.matchmakingservice.dto.GameServiceMatchResponse;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 
+/**
+ * Creates a <strong>new</strong> match in game-service for each pairing (fresh DB + Redis state).
+ * Uses GET /matches/{id} (permitAll on game-service) to drop stale Redis assignments.
+ */
 @Component
 public class GameServiceClient {
 
-    private static final Logger logger = LoggerFactory.getLogger(GameServiceClient.class);
+    private static final Logger log = LoggerFactory.getLogger(GameServiceClient.class);
 
-    private static final String CREATE_MATCH_ENDPOINT = "/api/game/matches";
-    private static final String GAME_SERVICE_REQUEST =
-            "Sending match creation request to Game Service for players {} and {}";
-    private static final String GAME_SERVICE_SUCCESS =
-            "Successfully created match in Game Service: gameServiceMatchId={}";
-    private static final String GAME_SERVICE_FAILURE =
-            "Failed to create match in Game Service: {}";
-    private static final String GAME_SERVICE_INITIALIZED =
-            "GameServiceClient initialized with URL: {}";
-    private static final String EMPTY_RESPONSE_ERROR =
-            "Empty response from Game Service";
-    private static final String MATCH_CREATION_FAILED =
-            "Failed to create match in Game Service";
+    private final RestClient restClient;
 
-    private final RestTemplate restTemplate;
-    private final String gameServiceUrl;
-
-    public GameServiceClient(
-            RestTemplate restTemplate,
-            @Value("${game.service.url}") String gameServiceUrl
-    ) {
-        this.restTemplate = restTemplate;
-        this.gameServiceUrl = gameServiceUrl;
-        logger.info(GAME_SERVICE_INITIALIZED, gameServiceUrl);
+    public GameServiceClient(@Value("${game.service.base-url}") String baseUrl) {
+        String root = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        this.restClient = RestClient.builder().baseUrl(root).build();
     }
 
-    public GameServiceMatchResponse createMatch(CreateMatchRequest request) {
-        Long p1 = request != null ? request.getPlayer1Id() : null;
-        Long p2 = request != null ? request.getPlayer2Id() : null;
-
-        logger.info(GAME_SERVICE_REQUEST, p1, p2);
-
+    public int createMatch(List<Long> playerIds) {
         try {
-            GameServiceCreateMatchRequest body =
-                    new GameServiceCreateMatchRequest(List.of(p1, p2));
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-
-            HttpEntity<GameServiceCreateMatchRequest> entity =
-                    new HttpEntity<>(body, headers);
-
-            String url = gameServiceUrl + CREATE_MATCH_ENDPOINT;
-
-            ResponseEntity<GameServiceMatchResponse> response =
-                    restTemplate.postForEntity(url, entity, GameServiceMatchResponse.class);
-
-            GameServiceMatchResponse matchResponse = response.getBody();
-            if (matchResponse != null) {
-                logger.info(GAME_SERVICE_SUCCESS, matchResponse.getMatchId());
-                return matchResponse;
+            CreateMatchBody body = new CreateMatchBody(playerIds);
+            MatchCreated res = restClient.post()
+                    .uri("/api/game/matches")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(MatchCreated.class);
+            if (res == null || res.matchId() == null) {
+                throw new IllegalStateException("game-service returned empty match body");
             }
-
-            throw new RuntimeException(EMPTY_RESPONSE_ERROR);
-
-        } catch (Exception ex) {
-            logger.error(GAME_SERVICE_FAILURE, ex.getMessage(), ex);
-            throw new RuntimeException(MATCH_CREATION_FAILED, ex);
+            log.info("Created new game matchId={} for players {}", res.matchId(), playerIds);
+            return res.matchId();
+        } catch (RestClientException e) {
+            log.error("game-service create match failed: {}", e.getMessage());
+            throw new IllegalStateException("Could not create match in game-service: " + e.getMessage(), e);
         }
     }
+
+    /**
+     * @return true if the match exists and includes {@code userId} as a player
+     */
+    public boolean matchContainsPlayer(int matchId, long userId) {
+        try {
+            MatchPlayersView m = restClient.get()
+                    .uri("/api/game/matches/{id}", matchId)
+                    .retrieve()
+                    .body(MatchPlayersView.class);
+            if (m == null || m.players() == null) {
+                return false;
+            }
+            return m.players().contains(userId);
+        } catch (RestClientException e) {
+            log.debug("Could not load match {} for validation: {}", matchId, e.getMessage());
+            return false;
+        }
+    }
+
+    public record CreateMatchBody(List<Long> playerIds) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record MatchCreated(Integer matchId) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record MatchPlayersView(Integer matchId, List<Long> players) {}
 }

@@ -1,46 +1,72 @@
 package org.java.diploma.service.matchmakingservice.controller;
 
-import org.java.diploma.service.matchmakingservice.dto.QueueJoinResponse;
-import org.java.diploma.service.matchmakingservice.dto.QueueStatusResponse;
-import org.java.diploma.service.matchmakingservice.service.MatchmakingService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import jakarta.servlet.http.HttpServletRequest;
+import org.java.diploma.service.matchmakingservice.security.JwtUserIdFilter;
+import org.java.diploma.service.matchmakingservice.service.MatchQueueService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/matchmaking")
 public class MatchmakingController {
 
-    private static final Logger logger = LoggerFactory.getLogger(MatchmakingController.class);
+    private final MatchQueueService queueService;
 
-    private static final String PLAYER_JOINED_QUEUE = "Player joined matchmaking queue";
-    private static final String PLAYER_LEFT_QUEUE = "Player left matchmaking queue";
-    private static final String QUEUE_STATUS_REQUESTED = "Queue status requested";
-
-    private final MatchmakingService service;
-
-    public MatchmakingController(MatchmakingService service) {
-        this.service = service;
+    public MatchmakingController(MatchQueueService queueService) {
+        this.queueService = queueService;
     }
 
     @PostMapping("/join")
-    public ResponseEntity<QueueJoinResponse> joinQueue(Authentication authentication) {
-        logger.info(PLAYER_JOINED_QUEUE);
-        return ResponseEntity.ok(service.joinQueue(authentication));
+    public ResponseEntity<Map<String, Object>> join(HttpServletRequest request) {
+        long userId = requireUserId(request);
+        queueService.invalidateAssignmentIfStale(userId);
+        MatchQueueService.JoinResult r = queueService.join(userId);
+        return ResponseEntity.ok(joinBody(r));
     }
 
     @PostMapping("/leave")
-    public ResponseEntity<Void> leave(Authentication authentication) {
-        logger.info(PLAYER_LEFT_QUEUE);
-        service.leaveQueue(authentication);
-        return ResponseEntity.ok().build();
+    public ResponseEntity<Void> leave(HttpServletRequest request) {
+        long userId = requireUserId(request);
+        queueService.leave(userId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/status")
-    public ResponseEntity<QueueStatusResponse> status(Authentication authentication) {
-        logger.debug(QUEUE_STATUS_REQUESTED);
-        return ResponseEntity.ok(service.getQueueStatus(authentication));
+    public ResponseEntity<Map<String, Object>> status(HttpServletRequest request) {
+        long userId = requireUserId(request);
+        MatchQueueService.StatusResult s = queueService.status(userId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("inQueue", s.inQueue());
+        body.put("position", s.position());
+        body.put("queueSize", s.queueSize());
+        if (s.matchId() != null) {
+            body.put("matchId", s.matchId());
+        }
+        return ResponseEntity.ok(body);
+    }
+
+    private static Map<String, Object> joinBody(MatchQueueService.JoinResult r) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", r.status());
+        body.put("userId", r.userId());
+        body.put("queueSize", r.queueSize());
+        if (r.matchId() != null) {
+            body.put("matchId", r.matchId());
+        }
+        return body;
+    }
+
+    private static long requireUserId(HttpServletRequest request) {
+        Object v = request.getAttribute(JwtUserIdFilter.ATTR_USER_ID);
+        if (!(v instanceof Long userId)) {
+            throw new IllegalStateException("userId not set by JWT filter");
+        }
+        return userId;
     }
 }

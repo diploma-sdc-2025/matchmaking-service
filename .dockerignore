@@ -1,6 +1,3 @@
-target/
+target
 .git
-.gitignore
 .idea
-.env
-node_modules
