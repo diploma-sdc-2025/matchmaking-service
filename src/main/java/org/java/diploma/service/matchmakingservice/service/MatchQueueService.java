@@ -18,17 +18,27 @@ public class MatchQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(MatchQueueService.class);
 
+    /** Nominal Elo for guest accounts when pairing uses ratings (queue is currently FIFO only). */
+    @SuppressWarnings("unused")
+    private static final int GUEST_EQUIVALENT_ELO = 1000;
+
     private static final String QUEUE_KEY = "matchmaking:queue";
     private static final String ASSIGNED_PREFIX = "matchmaking:assigned:";
     private static final Duration ASSIGNMENT_TTL = Duration.ofHours(24);
 
     private final StringRedisTemplate redis;
     private final GameServiceClient gameServiceClient;
+    private final AnalyticsEventPublisher analyticsEventPublisher;
     private final Object pairLock = new Object();
 
-    public MatchQueueService(StringRedisTemplate redis, GameServiceClient gameServiceClient) {
+    public MatchQueueService(
+            StringRedisTemplate redis,
+            GameServiceClient gameServiceClient,
+            AnalyticsEventPublisher analyticsEventPublisher
+    ) {
         this.redis = redis;
         this.gameServiceClient = gameServiceClient;
+        this.analyticsEventPublisher = analyticsEventPublisher;
     }
 
     /**
@@ -39,6 +49,7 @@ public class MatchQueueService {
         redis.delete(assignmentKey(uid));
         redis.opsForList().remove(QUEUE_KEY, 0, uid);
         redis.opsForList().rightPush(QUEUE_KEY, uid);
+        analyticsEventPublisher.publish("queue_join", userId, queueSize(), null);
         tryPairLocked();
         return buildJoinResult(userId);
     }
@@ -63,7 +74,14 @@ public class MatchQueueService {
 
     public void leave(long userId) {
         String uid = Long.toString(userId);
+        // If a match was already assigned, do not let a late "leave" clear queue/match flow.
+        // This prevents racey UI polling from reporting "left queue" after assignment.
+        String assigned = redis.opsForValue().get(assignmentKey(uid));
+        if (assigned != null) {
+            return;
+        }
         redis.opsForList().remove(QUEUE_KEY, 0, uid);
+        analyticsEventPublisher.publish("queue_leave", userId, queueSize(), null);
     }
 
     /**
@@ -83,7 +101,6 @@ public class MatchQueueService {
 
     public StatusResult status(long userId) {
         String uid = Long.toString(userId);
-        invalidateAssignmentIfStale(userId);
         String assigned = redis.opsForValue().get(assignmentKey(uid));
         if (assigned != null) {
             try {
@@ -114,6 +131,15 @@ public class MatchQueueService {
         return n == null ? 0 : n.intValue();
     }
 
+    /**
+     * Pairs the first two players in the FIFO queue.
+     * <p>
+     * Important: we must NOT dequeue players until {@link GameServiceClient#createMatch} succeeds.
+     * Otherwise, while game-service is creating the match, {@link #status} sees neither
+     * {@code inQueue} nor {@code matchId}, and the front-end briefly thinks the user “left the queue”
+     * exactly when a match was found.
+     * </p>
+     */
     private void tryPairLocked() {
         synchronized (pairLock) {
             while (true) {
@@ -121,29 +147,25 @@ public class MatchQueueService {
                 if (len == null || len < 2) {
                     return;
                 }
-                String a = redis.opsForList().leftPop(QUEUE_KEY);
-                String b = redis.opsForList().leftPop(QUEUE_KEY);
-                if (a == null || b == null) {
-                    if (a != null) {
-                        redis.opsForList().rightPush(QUEUE_KEY, a);
-                    }
-                    if (b != null) {
-                        redis.opsForList().rightPush(QUEUE_KEY, b);
-                    }
+                List<String> head = redis.opsForList().range(QUEUE_KEY, 0, 1);
+                if (head == null || head.size() < 2) {
                     return;
                 }
+                String a = head.get(0);
+                String b = head.get(1);
                 long ida;
                 long idb;
                 try {
                     ida = Long.parseLong(a);
                     idb = Long.parseLong(b);
                 } catch (NumberFormatException e) {
-                    log.warn("Invalid queue entries popped: {}, {}", a, b);
+                    log.warn("Invalid queue entries at head, removing first: {}", a);
+                    redis.opsForList().remove(QUEUE_KEY, 1, a);
                     continue;
                 }
                 if (ida == idb) {
-                    redis.opsForList().rightPush(QUEUE_KEY, a);
-                    return;
+                    redis.opsForList().remove(QUEUE_KEY, 1, a);
+                    continue;
                 }
                 List<Long> players = new ArrayList<>(List.of(ida, idb));
                 players.sort(Comparator.naturalOrder());
@@ -151,15 +173,24 @@ public class MatchQueueService {
                 try {
                     matchId = gameServiceClient.createMatch(players);
                 } catch (Exception e) {
-                    log.error("Pairing failed, re-queueing players {} and {}", ida, idb, e);
-                    redis.opsForList().rightPush(QUEUE_KEY, Long.toString(ida));
-                    redis.opsForList().rightPush(QUEUE_KEY, Long.toString(idb));
+                    log.error("Pairing failed (players still in queue at head): {} and {}", ida, idb, e);
                     return;
+                }
+                Long removedA = redis.opsForList().remove(QUEUE_KEY, 1, a);
+                Long removedB = redis.opsForList().remove(QUEUE_KEY, 1, b);
+                if (removedA == null || removedA == 0 || removedB == null || removedB == 0) {
+                    log.error(
+                            "Could not dequeue users {} and {} after match {} was created — assignments still written",
+                            ida,
+                            idb,
+                            matchId);
                 }
                 String mid = Integer.toString(matchId);
                 redis.opsForValue().set(assignmentKey(Long.toString(ida)), mid, ASSIGNMENT_TTL);
                 redis.opsForValue().set(assignmentKey(Long.toString(idb)), mid, ASSIGNMENT_TTL);
                 log.info("Paired users {} and {} into new match {}", ida, idb, matchId);
+                analyticsEventPublisher.publish("match_created", ida, queueSize(), (long) matchId);
+                analyticsEventPublisher.publish("match_created", idb, queueSize(), (long) matchId);
             }
         }
     }

@@ -4,10 +4,12 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.List;
 
@@ -48,7 +50,10 @@ public class GameServiceClient {
     }
 
     /**
-     * @return true if the match exists and includes {@code userId} as a player
+     * @return true if the match exists and includes {@code userId} as a player.
+     *         On transient errors (network, 5xx), returns {@code true} so callers do not
+     *         drop a valid Redis assignment — returning {@code false} here caused users to
+     *         disappear from queue while still searching (false “left queue” banner).
      */
     public boolean matchContainsPlayer(int matchId, long userId) {
         try {
@@ -60,9 +65,24 @@ public class GameServiceClient {
                 return false;
             }
             return m.players().contains(userId);
+        } catch (RestClientResponseException e) {
+            HttpStatusCode status = e.getStatusCode();
+            if (status.value() == 404) {
+                return false;
+            }
+            log.warn(
+                    "game-service match lookup inconclusive for matchId={} userId={} httpStatus={} — treating as valid assignment",
+                    matchId,
+                    userId,
+                    status.value());
+            return true;
         } catch (RestClientException e) {
-            log.debug("Could not load match {} for validation: {}", matchId, e.getMessage());
-            return false;
+            log.warn(
+                    "game-service unreachable validating matchId={} userId={} — treating as valid assignment: {}",
+                    matchId,
+                    userId,
+                    e.getMessage());
+            return true;
         }
     }
 

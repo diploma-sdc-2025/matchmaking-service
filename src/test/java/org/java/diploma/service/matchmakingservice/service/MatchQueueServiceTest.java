@@ -32,6 +32,8 @@ class MatchQueueServiceTest {
     @Mock
     private GameServiceClient gameServiceClient;
     @Mock
+    private AnalyticsEventPublisher analyticsEventPublisher;
+    @Mock
     private ListOperations<String, String> listOps;
     @Mock
     private ValueOperations<String, String> valueOps;
@@ -42,7 +44,7 @@ class MatchQueueServiceTest {
     void setUp() {
         lenient().when(redis.opsForList()).thenReturn(listOps);
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        service = new MatchQueueService(redis, gameServiceClient);
+        service = new MatchQueueService(redis, gameServiceClient, analyticsEventPublisher);
     }
 
     @Test
