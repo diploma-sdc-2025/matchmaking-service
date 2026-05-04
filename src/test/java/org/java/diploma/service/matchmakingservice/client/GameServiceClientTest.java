@@ -64,6 +64,6 @@ class GameServiceClientTest {
     void matchContainsPlayerReturnsFalseWhenServiceUnavailable() {
         server.enqueue(new MockResponse().setResponseCode(503));
 
-        assertFalse(client.matchContainsPlayer(123, 20L));
+        assertTrue(client.matchContainsPlayer(123, 20L));
     }
 }

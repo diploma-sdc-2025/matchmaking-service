@@ -67,8 +67,8 @@ class MatchQueueServiceTest {
 
     @Test
     void joinReturnsMatchedAndStoresAssignmentsWhenPairingSucceeds() {
-        when(listOps.size("matchmaking:queue")).thenReturn(2L, 1L, 0L);
-        when(listOps.leftPop("matchmaking:queue")).thenReturn("20", "10");
+        when(listOps.size("matchmaking:queue")).thenReturn(2L, 2L, 0L);
+        when(listOps.range("matchmaking:queue", 0, 1)).thenReturn(List.of("20", "10"));
         when(gameServiceClient.createMatch(any())).thenReturn(991);
         when(valueOps.get("matchmaking:assigned:10")).thenReturn("991");
 
